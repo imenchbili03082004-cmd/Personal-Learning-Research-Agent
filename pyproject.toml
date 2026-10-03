@@ -8,6 +8,8 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "docling>=2.132.0",
+    "ipykernel>=7.4.0",
     "langchain>=1.4.3",
     "langchain-ollama>=1.1.0",
     "langgraph>=1.2.12",
