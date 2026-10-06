@@ -32,6 +32,10 @@ class QuizQuestion(BaseModel):
         description="Explanation of why the answer is correct."
     )
 
+    topic: str = Field(
+        description="Specific topic tested by this question."
+)
+
 
 class Quiz(BaseModel):
     title: str = Field(
@@ -44,4 +48,89 @@ class Quiz(BaseModel):
 
     questions: list[QuizQuestion] = Field(
         description="List of quiz questions."
+    )
+
+
+class StudentAnswer(BaseModel):
+    question_id: int = Field(
+        description="Identifier of the quiz question."
+    )
+
+    answer: str = Field(
+        description="Answer provided by the student."
+    )
+
+
+class QuestionEvaluation(BaseModel):
+    question_id: int = Field(
+        description="Identifier of the evaluated question."
+    )
+
+    student_answer: str = Field(
+        description="Answer provided by the student."
+    )
+
+    correct_answer: str = Field(
+        description="Correct answer according to the quiz."
+    )
+
+    is_correct: bool = Field(
+        description="Whether the student's answer is correct."
+    )
+
+    score: float = Field(
+        ge=0,
+        le=1,
+        description="Score obtained for this question, between 0 and 1."
+    )
+
+    feedback: str = Field(
+        description="Short pedagogical feedback for the student."
+    )
+
+    topic: str = Field(
+        description="Topic associated with this question."
+    )
+
+
+class QuizEvaluation(BaseModel):
+    quiz_title: str = Field(
+        description="Title of the evaluated quiz."
+    )
+
+    total_questions: int = Field(
+        description="Total number of questions."
+    )
+
+    correct_answers: int = Field(
+        description="Number of correctly answered questions."
+    )
+
+    score: float = Field(
+        ge=0,
+        description="Total score obtained."
+    )
+
+    percentage: float = Field(
+        ge=0,
+        le=100,
+        description="Percentage score."
+    )
+
+    strong_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics that the student appears to understand well."
+    )
+
+    weak_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics that require further study."
+    )
+
+    question_results: list[QuestionEvaluation] = Field(
+        description="Detailed evaluation of every question."
+    )
+
+    overall_feedback: str = Field(
+        description="Overall pedagogical feedback for the student."
     )
