@@ -134,3 +134,70 @@ class QuizEvaluation(BaseModel):
     overall_feedback: str = Field(
         description="Overall pedagogical feedback for the student."
     )
+
+
+class QuizPerformance(BaseModel):
+    quiz_title: str = Field(
+        description="Title of the completed quiz."
+    )
+
+    score: float = Field(
+        ge=0,
+        description="Score obtained in the quiz."
+    )
+
+    percentage: float = Field(
+        ge=0,
+        le=100,
+        description="Percentage obtained in the quiz."
+    )
+
+    weak_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics that need improvement."
+    )
+
+    strong_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics that are well understood."
+    )
+
+
+class StudentProfile(BaseModel):
+    student_id: str = Field(
+        description="Unique identifier of the student."
+    )
+
+    quizzes_completed: int = Field(
+        default=0,
+        ge=0,
+        description="Number of completed quizzes."
+    )
+
+    average_score: float = Field(
+        default=0.0,
+        ge=0,
+        description="Average score across completed quizzes."
+    )
+
+    average_percentage: float = Field(
+        default=0.0,
+        ge=0,
+        le=100,
+        description="Average percentage across completed quizzes."
+    )
+
+    strong_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics the student generally understands well."
+    )
+
+    weak_topics: list[str] = Field(
+        default_factory=list,
+        description="Topics that require further study."
+    )
+
+    performance_history: list[QuizPerformance] = Field(
+        default_factory=list,
+        description="Historical quiz performance."
+    )
