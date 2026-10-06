@@ -201,3 +201,52 @@ class StudentProfile(BaseModel):
         default_factory=list,
         description="Historical quiz performance."
     )
+
+
+class StudySession(BaseModel):
+    session_number: int = Field(
+        description="Number of the study session."
+    )
+
+    topic: str = Field(
+        description="Topic to study during this session."
+    )
+
+    objective: str = Field(
+        description="Learning objective of the session."
+    )
+
+    activities: list[str] = Field(
+        description="Learning activities planned for the session."
+    )
+
+    priority: Literal[
+        "high",
+        "medium",
+        "low"
+    ] = Field(
+        description="Priority of the session."
+    )
+
+    estimated_minutes: int = Field(
+        ge=5,
+        description="Estimated duration of the session in minutes."
+    )
+
+
+class StudyPlan(BaseModel):
+    student_id: str = Field(
+        description="Identifier of the student."
+    )
+
+    overall_goal: str = Field(
+        description="Overall learning goal of the study plan."
+    )
+
+    sessions: list[StudySession] = Field(
+        description="Personalized study sessions."
+    )
+
+    plan_summary: str = Field(
+        description="Short explanation of the reasoning behind the plan."
+    )
