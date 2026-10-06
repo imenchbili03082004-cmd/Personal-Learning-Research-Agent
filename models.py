@@ -250,3 +250,75 @@ class StudyPlan(BaseModel):
     plan_summary: str = Field(
         description="Short explanation of the reasoning behind the plan."
     )
+
+
+
+class PaperSummary(BaseModel):
+    title: str = Field(
+        description="Title of the scientific paper."
+    )
+
+    authors: list[str] = Field(
+        default_factory=list,
+        description="Authors of the paper."
+    )
+
+    year: str = Field(
+        description="Publication year of the paper."
+    )
+
+    research_problem: str = Field(
+        description="Main research problem addressed by the paper."
+    )
+
+    methodology: str = Field(
+        description="Main methodology or approach used."
+    )
+
+    dataset: str = Field(
+        description="Dataset or data used in the study."
+    )
+
+    main_results: str = Field(
+        description="Main results reported by the paper."
+    )
+
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="Main strengths of the paper."
+    )
+
+    limitations: list[str] = Field(
+        default_factory=list,
+        description="Main limitations of the paper."
+    )
+
+
+class PaperComparison(BaseModel):
+    papers: list[PaperSummary] = Field(
+        description="Structured summaries of the compared papers."
+    )
+
+    comparison_points: list[str] = Field(
+        description="Important differences and similarities between the papers."
+    )
+
+    methodology_comparison: str = Field(
+        description="Comparison of the methodologies used by the papers."
+    )
+
+    results_comparison: str = Field(
+        description="Comparison of the reported results."
+    )
+
+    strengths_comparison: str = Field(
+        description="Comparison of the strengths of the papers."
+    )
+
+    limitations_comparison: str = Field(
+        description="Comparison of the limitations of the papers."
+    )
+
+    overall_conclusion: str = Field(
+        description="Overall conclusion from the comparison."
+    )
