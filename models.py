@@ -322,3 +322,21 @@ class PaperComparison(BaseModel):
     overall_conclusion: str = Field(
         description="Overall conclusion from the comparison."
     )
+
+
+class Route(BaseModel):
+    next: Literal[
+        "tutor",
+        "quiz",
+        "evaluation",
+        "planner",
+        "research",
+        "comparison",
+        "FINISH"
+    ] = Field(
+        description="The next agent that should handle the request."
+    )
+
+    reason: str = Field(
+        description="Short explanation for why this agent was selected."
+    )
