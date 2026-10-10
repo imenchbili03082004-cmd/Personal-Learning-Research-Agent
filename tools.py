@@ -1,63 +1,97 @@
+
 from typing import Annotated
+from urllib.parse import urlparse
 
+import requests
+from bs4 import BeautifulSoup
+from ddgs import DDGS
 from langchain_core.tools import tool
-from ollama import Client
 
+MAX_RESULTS = 3
+MAX_SEARCH_CONTENT_CHARS = 2000
+MAX_FETCH_CONTENT_CHARS = 8000
 
-ollama = Client(
-    host="https://ollama.com"
-)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; ResearchAssistant/1.0)"
+}
 
 
 @tool
 def web_search(
     query: Annotated[str, "The search query"],
-    max_results: Annotated[int, "Maximum number of results"] = 5,
+    max_results: Annotated[int, "Maximum number of results"] = 3,
 ):
-    """
-    Search the web and return relevant results.
-    """
+    """Search the web and return relevant results."""
 
-    max_results = max(1, min(max_results, 5))
+    max_results = max(1, min(max_results, MAX_RESULTS))
 
-    response = ollama.web_search(
-        query=query,
-        max_results=max_results
-    )
-
-    if not response.results:
-        return "No search results found."
-
-    results = []
-
-    for result in response.results:
-        results.append(
-            {
-                "title": result.title,
-                "url": result.url,
-                "content": result.content,
-            }
+    with DDGS() as ddgs:
+        results = list(
+            ddgs.text(query, max_results=max_results)
         )
 
-    return results
+    if not results:
+        return "No search results found."
+
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("href", ""),
+            "content": item.get("body", "")[
+                :MAX_SEARCH_CONTENT_CHARS
+            ],
+        }
+        for item in results
+    ]
 
 
 @tool
 def web_fetch(
     url: Annotated[str, "The URL of the web page to fetch"]
 ):
-    """
-    Fetch the content of a web page.
-    """
+    """Fetch a web page and extract its text."""
 
-    response = ollama.web_fetch(
-        url=url
-    )
+    parsed = urlparse(url)
 
-    return response
+    if parsed.scheme != "https" or not parsed.hostname:
+        return "Only valid HTTPS URLs are allowed."
 
+    if parsed.hostname.lower() in {
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+    }:
+        return "Local URLs are not allowed."
 
-tools = [
-    web_search,
-    web_fetch,
-]
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=15,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+
+        # Check the final URL after redirects too.
+        final_url = urlparse(response.url)
+        if (
+            final_url.scheme != "https"
+            or not final_url.hostname
+            or final_url.hostname.lower()
+            in {"localhost", "127.0.0.1", "0.0.0.0"}
+        ):
+            return "Redirect to a disallowed URL."
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        for tag in soup(
+            ["script", "style", "nav", "footer", "header"]
+        ):
+            tag.decompose()
+
+        content = soup.get_text(separator=" ", strip=True)
+
+        return content[:MAX_FETCH_CONTENT_CHARS]
+
+    except requests.RequestException as exc:
+        return f"Unable to fetch page: {exc}"

@@ -111,11 +111,18 @@ def get_llm():
     Create the Ollama Cloud LLM.
     """
     
-    return ChatOllama(
+    """return ChatOllama(
         base_url=OLLAMA_BASE_URL,
         model=OLLAMA_MODEL,
         temperature=0
+    )"""
+
+    return ChatOllama(
+    model="gemma4:e2b",
+    temperature=0,
+    num_predict=1000,
     )
+
 
 
 # --------------------------------------------------
