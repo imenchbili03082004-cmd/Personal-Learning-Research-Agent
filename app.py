@@ -5,6 +5,7 @@ import streamlit as st
 from langgraph.types import Command
 
 from graph import learning_graph, create_initial_state, make_config
+from models import Quiz, StudentProfile
 
 st.set_page_config(
     page_title="Personal Learning Assistant",
@@ -18,19 +19,53 @@ st.caption(
     "préparez vos révisions et explorez la littérature scientifique."
 )
 
-# ---------------- Session ----------------
+
+# ---------------- Session persistante ----------------
+
+import uuid
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+THREAD_FILE = PROJECT_ROOT / "active_thread.txt"
+
+
+def load_or_create_thread_id():
+    """Charge le fil actif ou en crée un nouveau."""
+    if THREAD_FILE.exists():
+        saved_id = THREAD_FILE.read_text(encoding="utf-8").strip()
+        if saved_id:
+            return saved_id
+
+    new_id = str(uuid.uuid4())
+    THREAD_FILE.write_text(new_id, encoding="utf-8")
+    return new_id
+
+
+def save_thread_id(thread_id: str):
+    """Enregistre le fil actif pour les prochains démarrages."""
+    THREAD_FILE.write_text(thread_id, encoding="utf-8")
+
+
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())
+    st.session_state.thread_id = load_or_create_thread_id()
+
 if "config" not in st.session_state:
-    st.session_state.config = make_config(st.session_state.thread_id)
+    st.session_state.config = make_config(
+        st.session_state.thread_id
+    )
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
 if "pending_interrupt" not in st.session_state:
     st.session_state.pending_interrupt = None
+
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
+
 if "student_profile" not in st.session_state:
     st.session_state.student_profile = None
+
 
 
 def as_dict(value):
@@ -65,11 +100,12 @@ def show_structured_result(result):
                 st.caption(
                     f"Type : {question.get('question_type', 'non précisé')}"
                 )
-                with st.expander("Afficher la correction"):
-                    st.markdown(
-                        f"**Réponse :** {question.get('correct_answer', 'Non fournie')}"
-                    )
-                    st.write(question.get("explanation", ""))
+                if st.session_state.get("quiz_submitted", False):
+                    with st.expander("Afficher la correction"):
+                        st.markdown(
+                            f"**Réponse correcte :** {question.get('correct_answer', 'Non fournie')}"
+                        )
+                        st.write(question.get("explanation", ""))
 
     plan = as_dict(result.get("study_plan"))
     if plan:
@@ -116,14 +152,39 @@ def show_structured_result(result):
                 with st.expander(paper.get("title", f"Source {index}")):
                     st.json(paper)
 
-    evaluation = result.get("evaluation")
-    if evaluation is not None:
-        st.subheader("Évaluation")
-        st.write(evaluation)
+    evaluation = as_dict(result.get("evaluation"))
+    if evaluation:
+        st.subheader("Résultat de l'évaluation")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Pourcentage", f"{evaluation.get('percentage', 0):.1f}%")
+        col2.metric("Réponses entièrement correctes", evaluation.get("correct_answers", 0))
+        col3.metric("Questions évaluées", evaluation.get("total_questions", 0))
+        st.write(evaluation.get("overall_feedback", ""))
+        for item in evaluation.get("question_results", []):
+            with st.expander(f"Question {item.get('question_id')} — {'Correcte' if item.get('is_correct') else 'À revoir'}"):
+                st.write("**Ta réponse :**", item.get("student_answer", ""))
+                st.write("**Réponse attendue :**", item.get("correct_answer", ""))
+                st.write(item.get("feedback", ""))
+        if evaluation.get("strong_topics"):
+            st.success("Points forts : " + ", ".join(evaluation["strong_topics"]))
+        if evaluation.get("weak_topics"):
+            st.warning("À revoir : " + ", ".join(evaluation["weak_topics"]))
 
 
 def process_graph_result(result):
     st.session_state.last_result = result
+    quiz_value = result.get("quiz")
+    if quiz_value is not None:
+        st.session_state.last_quiz = as_dict(quiz_value)
+        st.session_state.quiz_submitted = False
+    profile_value = result.get("student_profile")
+    if profile_value is not None:
+        st.session_state.student_profile = (
+            profile_value if isinstance(profile_value, StudentProfile)
+            else StudentProfile.model_validate(profile_value)
+        )
+    if result.get("evaluation") is not None:
+        st.session_state.quiz_submitted = True
     interruptions = result.get("__interrupt__", [])
     if interruptions:
         st.session_state.pending_interrupt = interruptions[0].value
@@ -143,12 +204,46 @@ def process_graph_result(result):
     )
 
 
+
 def start_new_conversation():
-    st.session_state.thread_id = str(uuid.uuid4())
-    st.session_state.config = make_config(st.session_state.thread_id)
+    new_id = str(uuid.uuid4())
+
+    st.session_state.thread_id = new_id
+    st.session_state.config = make_config(new_id)
+
+    # Sauvegarder le nouvel identifiant actif
+    save_thread_id(new_id)
+
     st.session_state.messages = []
     st.session_state.pending_interrupt = None
     st.session_state.last_result = None
+    st.session_state.student_profile = None
+
+
+# ---------------- Restaurer une interruption HITL ----------------
+
+if st.session_state.pending_interrupt is None:
+    try:
+        snapshot = learning_graph.get_state(
+            st.session_state.config
+        )
+
+        if snapshot and snapshot.tasks:
+            for task in snapshot.tasks:
+                if task.interrupts:
+                    interrupt_value = task.interrupts[0].value
+
+                    if isinstance(interrupt_value, dict):
+                        st.session_state.pending_interrupt = (
+                            interrupt_value
+                        )
+                        break
+
+    except Exception as exc:
+        st.warning(
+            "Impossible de restaurer l'interruption en attente."
+        )
+        st.caption(str(exc))
 
 
 # ---------------- Sidebar ----------------
@@ -168,13 +263,14 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Profil étudiant")
-    st.write(
-        "Le graphe accepte un `StudentProfile` existant. "
-        "La création et la persistance du profil seront connectées "
-        "à votre modèle `StudentProfile` dans une étape dédiée."
-    )
-    if st.session_state.student_profile is None:
-        st.caption("Aucun profil chargé dans cette session.")
+    profile = st.session_state.student_profile
+    st.metric("Quiz terminés", profile.quizzes_completed)
+    st.metric("Moyenne", f"{profile.average_percentage:.1f}%")
+    if profile.weak_topics:
+        st.caption("À réviser : " + ", ".join(profile.weak_topics[:5]))
+    if profile.strong_topics:
+        st.caption("Points forts : " + ", ".join(profile.strong_topics[:5]))
+    st.caption("Le profil est conservé pendant cette session Streamlit.")
 
     st.divider()
     st.caption("Identifiant de session")
@@ -192,10 +288,8 @@ with st.expander("📄 Importer un PDF de cours", expanded=False):
         key="course_pdf_uploader",
     )
     st.caption(
-        "Cette section extrait et prévisualise le texte avec Docling. "
-        "Le PDF n'est pas encore ajouté automatiquement à FAISS ; "
-        "il ne sera donc pas utilisé par le tuteur RAG tant que "
-        "l'indexation n'est pas reliée à votre fonction dans rag.py."
+        "Étape 1 : extraire le texte avec Docling. "
+        "Étape 2 : indexer le texte dans FAISS pour que le tuteur RAG puisse l'utiliser."
     )
     if uploaded_pdf is not None:
         if st.button("Extraire le texte du PDF", key="extract_pdf"):
@@ -227,10 +321,88 @@ with st.expander("📄 Importer un PDF de cours", expanded=False):
                 st.exception(exc)
 
 
+    if st.session_state.get("extracted_course_text"):
+        if st.button("Indexer le cours dans FAISS", key="index_course_pdf"):
+            try:
+                from rag import index_text
+
+                source_path = st.session_state.get(
+                    "extracted_course_path", uploaded_pdf.name if uploaded_pdf else "cours importé"
+                )
+                with st.spinner("Découpage et indexation du cours dans FAISS..."):
+                    chunk_count = index_text(
+                        text=st.session_state.extracted_course_text,
+                        source=Path(source_path).name,
+                    )
+                st.success(
+                    f"Cours indexé dans FAISS : {chunk_count} segments ajoutés. "
+                    "Le tuteur et le générateur de quiz pourront les récupérer."
+                )
+            except Exception as exc:
+                st.error("L'indexation du cours dans FAISS a échoué.")
+                st.exception(exc)
+
+
 # ---------------- Chat history ----------------
 for item in st.session_state.messages:
     with st.chat_message(item["role"]):
         st.markdown(item["content"])
+
+
+# ---------------- Quiz answers and evaluation ----------------
+last_quiz = st.session_state.get("last_quiz")
+if last_quiz and not st.session_state.get("quiz_submitted", False):
+    st.subheader("Répondre au quiz")
+    with st.form("quiz_answer_form"):
+        submitted_answers = []
+        for index, question in enumerate(last_quiz.get("questions", []), start=1):
+            qid = question.get("question_id", index)
+            st.markdown(f"**Question {qid}.** {question.get('question', '')}")
+            qtype = question.get("question_type", "short_answer")
+            choices = question.get("choices") or []
+            if qtype == "multiple_choice" and choices:
+                answer = st.radio(
+                    "Choisis une réponse", choices,
+                    key=f"quiz_answer_{qid}", index=None,
+                )
+            elif qtype == "true_false":
+                answer = st.radio(
+                    "Choisis une réponse", ["Vrai", "Faux"],
+                    key=f"quiz_answer_{qid}", index=None,
+                )
+            else:
+                answer = st.text_input(
+                    "Ta réponse", key=f"quiz_answer_{qid}"
+                )
+            submitted_answers.append({"question_id": qid, "answer": answer or ""})
+        submitted = st.form_submit_button("Corriger mes réponses", type="primary")
+
+    if submitted:
+        if any(not item["answer"].strip() for item in submitted_answers):
+            st.warning("Réponds à toutes les questions avant de demander la correction.")
+        else:
+            try:
+                quiz_model = Quiz.model_validate(last_quiz)
+                evaluation_state = create_initial_state(
+                    user_message=(
+                        "Evaluate the student's answers to the current quiz. "
+                        "Return the structured evaluation and update the student profile."
+                    ),
+                    student_id=st.session_state.student_profile.student_id,
+                    quiz=quiz_model,
+                    student_answers=submitted_answers,
+                    student_profile=st.session_state.student_profile,
+                )
+                with st.spinner("Correction du quiz en cours..."):
+                    evaluated = learning_graph.invoke(
+                        evaluation_state,
+                        config=st.session_state.config,
+                    )
+                process_graph_result(evaluated)
+                st.rerun()
+            except Exception as exc:
+                st.error("L'évaluation du quiz a échoué.")
+                st.exception(exc)
 
 
 # ---------------- Human in the loop ----------------

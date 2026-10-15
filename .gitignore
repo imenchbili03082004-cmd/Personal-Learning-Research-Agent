@@ -31,3 +31,16 @@ vectorstore/
 # OS
 .DS_Store
 Thumbs.db
+
+# LangGraph SQLite checkpoints
+checkpoints.sqlite
+checkpoints.sqlite-shm
+checkpoints.sqlite-wal
+
+# Conversation active locale
+active_thread.txt
+
+# Checkpoints LangGraph
+checkpoints.sqlite
+checkpoints.sqlite-shm
+checkpoints.sqlite-wal

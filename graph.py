@@ -1,11 +1,16 @@
+import json
 from models import Route
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
+import sqlite3
+from pathlib import Path
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 router_llm = ChatOllama(
     model="gemma4:e2b",
     temperature=0,
-    num_predict=1000,
+    num_ctx=1024,
+    num_predict=256,
 )
 router = router_llm.with_structured_output(Route)
 
@@ -24,6 +29,8 @@ from models import (
     StudentProfile,
     StudyPlan,
     PaperComparison,
+    QuizEvaluation,
+    QuizPerformance,
 )
 
 from rag import (
@@ -114,7 +121,8 @@ def tutor_node(state: LearningResearchState):
 llm = ChatOllama(
     model="gemma4:e2b",
     temperature=0,
-    num_predict=1000,
+    num_ctx=2048,
+    num_predict=512,
 )
 from rag import (
     load_vector_store,
@@ -1266,229 +1274,119 @@ def supervisor_node(state: LearningResearchState):
         "next": decision.next
     }
 
-from models import (
-    QuestionEvaluation,
-    QuizEvaluation,
-    StudentAnswer
-)
 evaluation_llm = llm.with_structured_output(QuizEvaluation)
-
-def build_evaluation_prompt(
-    quiz: Quiz,
-    student_answers: list[StudentAnswer]
-):
-    quiz_data = "\n\n".join(
-        [
-            f"""
-Question ID: {question.question_id}
-Question: {question.question}
-Type: {question.question_type}
-Choices: {question.choices}
-Correct answer: {question.correct_answer}
-Topic: {question.topic}
-Explanation: {question.explanation}
-"""
-            for question in quiz.questions
-        ]
-    )
-
-    answers_data = "\n\n".join(
-        [
-            f"""
-Question ID: {answer.question_id}
-Student answer: {answer.answer}
-"""
-            for answer in student_answers
-        ]
-    )
-
-    return f"""
-You are an educational evaluation assistant.
-
-Your task is to evaluate a student's answers to a university quiz.
-
-QUIZ
-====
-Title: {quiz.title}
-Main topic: {quiz.topic}
-
-{quiz_data}
-
-STUDENT ANSWERS
-===============
-{answers_data}
-
-EVALUATION RULES
-================
-
-1. Evaluate every question in the quiz.
-2. Match each student answer to the question using question_id.
-3. Compare the student's answer with the correct answer provided in the quiz.
-4. For multiple-choice questions, consider the answer correct only if it
-   corresponds to the provided correct answer.
-5. For true/false questions, compare the student's answer with the provided
-   correct answer.
-6. For short-answer questions, evaluate the meaning and correctness of the
-   student's answer, not only the exact wording.
-7. Do not use knowledge that is not supported by the quiz information.
-8. Give a score between 0 and 1 for every question.
-9. A fully correct answer should receive a score of 1.
-10. A completely incorrect answer should receive a score of 0.
-11. A partially correct short-answer response may receive a score between
-    0 and 1.
-12. Set is_correct to true only when the answer is sufficiently correct.
-13. Provide short and clear pedagogical feedback for every question.
-14. Identify the topics the student understands well.
-15. Identify the topics the student needs to review.
-16. Calculate the total score from the individual question scores.
-17. Calculate the percentage based on the total score.
-18. Count the number of correctly answered questions.
-19. Return exactly one QuestionEvaluation for every quiz question.
-20. Preserve the original question_id for every question.
-21. Preserve the student's answer exactly in student_answer.
-22. Use the provided correct answer in correct_answer.
-23. Use the topic provided for each question.
-24. quiz_title must be exactly the title of the quiz.
-25. total_questions must equal the number of questions in the quiz.
-26. correct_answers must equal the number of questions where is_correct is true.
-27. score must represent the total score obtained from all questions.
-28. percentage must represent the score as a percentage from 0 to 100.
-
-OUTPUT FORMAT
-=============
-
-Return ONLY one JSON object corresponding to the QuizEvaluation schema.
-
-The output must contain these top-level fields:
-
-- quiz_title
-- total_questions
-- correct_answers
-- score
-- percentage
-- strong_topics
-- weak_topics
-- question_results
-- overall_feedback
-
-Each object inside question_results MUST contain:
-
-- question_id
-- student_answer
-- correct_answer
-- is_correct
-- score
-- feedback
-- topic
-
-The question_results list MUST contain exactly {len(quiz.questions)} elements.
-
-There must be exactly one QuestionEvaluation object for each quiz question.
-
-IMPORTANT OUTPUT RESTRICTIONS:
-
-- Return ONLY the JSON object.
-- Do NOT return Markdown.
-- Do NOT use ```json.
-- Do NOT use ``` or code fences.
-- Do NOT write any introduction before the JSON.
-- Do NOT write any conclusion after the JSON.
-- Do NOT add bullet points outside the JSON.
-- Do NOT add recommendations outside the JSON.
-- Do NOT add explanations outside the JSON.
-- All feedback, recommendations, and evaluation comments must be placed
-  inside the appropriate JSON fields.
-- The JSON must be valid and parseable.
-- Use double quotes for JSON strings.
-- Do not add trailing commas.
-
-Return ONLY the structured QuizEvaluation JSON object.
-"""
-
-def evaluate_quiz(
-    quiz: Quiz,
-    student_answers: list[StudentAnswer],
-    evaluation_llm
-):
-    prompt = build_evaluation_prompt(
-        quiz=quiz,
-        student_answers=student_answers
-    )
-
-    evaluation = evaluation_llm.invoke(prompt)
-
-    return evaluation
 
 
 def evaluation_node(state: LearningResearchState):
-    """Evaluate the student's answers to the quiz."""
-
+    """Evaluate quiz answers and update the student's in-session profile."""
     quiz = state.get("quiz")
-    student_answers = state.get("student_answers", [])
+    answers = state.get("student_answers") or []
 
-    # Vérifier que le quiz est disponible
     if quiz is None:
         response = (
-            "No quiz is available for evaluation. "
-            "Please generate a quiz before submitting your answers."
+            "Aucun quiz n'est disponible pour l'évaluation. "
+            "Génère d'abord un quiz, puis réponds aux questions."
         )
-        return {
-            "response": response,
-            "messages": [AIMessage(content=response)],
-        }
+        return {"response": response, "messages": [AIMessage(content=response)]}
 
-    # Vérifier que les réponses sont disponibles
-    if not student_answers:
-        response = (
-            "No student answers are available. "
-            "Please submit your answers before requesting an evaluation."
-        )
-        return {
-            "response": response,
-            "messages": [AIMessage(content=response)],
-        }
+    if hasattr(quiz, "model_dump"):
+        quiz_data = quiz.model_dump()
+    elif isinstance(quiz, dict):
+        quiz_data = quiz
+    else:
+        response = "Le format du quiz fourni n'est pas reconnu."
+        return {"response": response, "messages": [AIMessage(content=response)]}
 
-    try:
-        # Évaluer les réponses avec l'évaluateur existant
-        evaluation = evaluate_quiz(
-            quiz=quiz,
-            student_answers=student_answers,
-            evaluation_llm=evaluation_llm,
-        )
+    normalized_answers = []
+    for item in answers:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if isinstance(item, dict) and "question_id" in item:
+            normalized_answers.append({
+                "question_id": int(item["question_id"]),
+                "answer": str(item.get("answer", "")).strip(),
+            })
 
-        # Enregistrer le résultat de l'évaluation
-        if hasattr(evaluation, "model_dump"):
-            evaluation_data = evaluation.model_dump()
-            response = (
-                f"Quiz evaluation completed successfully!\n\n"
-                f"Quiz: {evaluation.quiz_title}\n"
-                f"Score: {evaluation.score}\n"
-                f"Percentage: {evaluation.percentage:.2f}%\n"
-                f"Correct answers: {evaluation.correct_answers}/"
-                f"{evaluation.total_questions}\n\n"
-                f"Strong topics: {evaluation.strong_topics}\n"
-                f"Weak topics: {evaluation.weak_topics}\n\n"
-                f"Feedback: {evaluation.overall_feedback}"
-            )
-        else:
-            evaluation_data = evaluation
-            response = str(evaluation)
+    if not normalized_answers:
+        response = "Aucune réponse n'a été soumise. Réponds au quiz avant l'évaluation."
+        return {"response": response, "messages": [AIMessage(content=response)]}
 
-        return {
-            "evaluation": evaluation,
-            "response": response,
-            "messages": [AIMessage(content=response)],
-        }
+    prompt = f"""
+You are a careful university quiz evaluator. Evaluate the student's submitted answers
+against the quiz's correct answers. Use partial credit only for short-answer questions
+when the meaning is substantially correct. Multiple-choice and true/false answers must
+be judged against the supplied correct answer. Do not invent questions or answers.
+Return a QuizEvaluation object with one question_results entry for every quiz question.
+Use score from 0 to 1 for each question; total score is the sum of question scores,
+correct_answers counts fully correct answers, and percentage is total score divided by
+total_questions multiplied by 100. strong_topics and weak_topics must be based on results.
+Write feedback in the same language as the student's answers or quiz where possible.
 
-    except Exception as e:
-        response = (
-            "An error occurred while evaluating the quiz: "
-            f"{str(e)}"
-        )
-        return {
-            "response": response,
-            "messages": [AIMessage(content=response)],
-        }
+QUIZ JSON:
+{json.dumps(quiz_data, ensure_ascii=False, default=str)}
+
+STUDENT ANSWERS JSON:
+{json.dumps(normalized_answers, ensure_ascii=False)}
+"""
+
+    evaluation = evaluation_llm.invoke(prompt)
+    if not isinstance(evaluation, QuizEvaluation):
+        evaluation = QuizEvaluation.model_validate(evaluation)
+
+    # Ensure aggregate values remain consistent with the per-question scores.
+    total_questions = len(evaluation.question_results)
+    if total_questions:
+        total_score = round(sum(q.score for q in evaluation.question_results), 2)
+        percentage = round(total_score / total_questions * 100, 2)
+        correct_count = sum(1 for q in evaluation.question_results if q.score >= 0.999)
+        evaluation = evaluation.model_copy(update={
+            "total_questions": total_questions,
+            "score": total_score,
+            "percentage": min(100.0, max(0.0, percentage)),
+            "correct_answers": correct_count,
+        })
+
+    student_id = state.get("student_id", "student_001")
+    profile = state.get("student_profile")
+    if isinstance(profile, dict):
+        profile = StudentProfile.model_validate(profile)
+    if profile is None:
+        profile = StudentProfile(student_id=student_id)
+
+    performance = QuizPerformance(
+        quiz_title=evaluation.quiz_title,
+        score=evaluation.score,
+        percentage=evaluation.percentage,
+        weak_topics=evaluation.weak_topics,
+        strong_topics=evaluation.strong_topics,
+    )
+    history = [*profile.performance_history, performance]
+    avg_score = round(sum(p.score for p in history) / len(history), 2)
+    avg_percentage = round(sum(p.percentage for p in history) / len(history), 2)
+
+    def merge_topics(existing, new_items):
+        return list(dict.fromkeys([*(existing or []), *(new_items or [])]))
+
+    updated_profile = profile.model_copy(update={
+        "quizzes_completed": len(history),
+        "average_score": avg_score,
+        "average_percentage": avg_percentage,
+        "strong_topics": merge_topics(profile.strong_topics, evaluation.strong_topics),
+        "weak_topics": merge_topics(profile.weak_topics, evaluation.weak_topics),
+        "performance_history": history,
+    })
+
+    response = (
+        f"Évaluation terminée : {evaluation.percentage:.1f}% "
+        f"({evaluation.correct_answers}/{evaluation.total_questions} réponses entièrement correctes). "
+        f"Le profil étudiant a été mis à jour."
+    )
+    return {
+        "evaluation": evaluation,
+        "student_profile": updated_profile,
+        "response": response,
+        "messages": [AIMessage(content=response)],
+    }
 
 
 graph_builder = StateGraph(
@@ -1599,11 +1497,31 @@ def make_config(thread_id: str):
         }
     }
 
-from langgraph.checkpoint.memory import MemorySaver
-memory = MemorySaver()
+
+# ==========================================
+# PERSISTANCE SQLITE POUR LANGGRAPH
+# ==========================================
+
+# Le fichier sera créé dans le dossier du projet.
+PROJECT_ROOT = Path(__file__).resolve().parent
+CHECKPOINT_DB = PROJECT_ROOT / "checkpoints.sqlite"
+
+# Connexion persistante à SQLite.
+# check_same_thread=False permet à la connexion d'être
+# utilisée depuis différents threads de l'application.
+sqlite_connection = sqlite3.connect(
+    str(CHECKPOINT_DB),
+    check_same_thread=False,
+)
+
+# Checkpointer SQLite
+memory = SqliteSaver(sqlite_connection)
+
+# Compilation du graphe avec sauvegarde persistante
 learning_graph = graph_builder.compile(
     checkpointer=memory
 )
+
 
 
 
